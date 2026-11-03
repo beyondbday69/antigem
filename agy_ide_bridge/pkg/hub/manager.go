@@ -2,6 +2,7 @@ package hub
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -374,6 +375,11 @@ func (m *HubManager) StartContinuousMonitor() {
 	}()
 }
 
+func fileExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir()
+}
+
 // IsPortActive checks if the hub port is currently listening.
 func (m *HubManager) IsPortActive() bool {
 	return m.isHubReady()
@@ -411,6 +417,12 @@ func (m *HubManager) Start() error {
 	m.setStatusLocked(HubStatusStarting, "")
 
 	if m.AgyBinPath == "" {
+		bins := FindAllAgyBinaries()
+		if len(bins) > 0 {
+			m.AgyBinPath = bins[0]
+		}
+	}
+	if m.AgyBinPath == "" {
 		err := fmt.Errorf("AGY executable binary not specified or found")
 		m.setStatusLocked(HubStatusError, err.Error())
 		return err
@@ -419,19 +431,14 @@ func (m *HubManager) Start() error {
 	// In-place patch AGY binary with 20-byte framed security header (Strict Fail-Closed Security)
 	if m.SecurityToken != "" {
 		patchTarget := ResolvePatchTarget(m.AgyBinPath)
-		if patchTarget == "" {
-			err := fmt.Errorf("AGY executable binary not found for security header patching")
-			m.setStatusLocked(HubStatusError, err.Error())
-			return err
+		if patchTarget != "" {
+			patchedHeader, elapsed, err := security.PatchAgyHeader(patchTarget, m.SecurityToken)
+			if err != nil {
+				log.Printf("\033[1;33m[Security Warning]\033[0m Patch AGY binary (%s) skipped: %v. Proceeding with standard header...", patchTarget, err)
+			} else {
+				log.Printf("\033[1;32m[Security]\033[0m In-place patched AGY binary (%s) in %v -> Active Header: %s", patchTarget, elapsed, patchedHeader)
+			}
 		}
-		patchedHeader, elapsed, err := security.PatchAgyHeader(patchTarget, m.SecurityToken)
-		if err != nil {
-			errMsg := fmt.Sprintf("Security Error: Failed to patch AGY binary (%s): %v", patchTarget, err)
-			log.Printf("\033[1;31m[Security Fatal]\033[0m %s", errMsg)
-			m.setStatusLocked(HubStatusError, errMsg)
-			return errors.New(errMsg)
-		}
-		log.Printf("\033[1;32m[Security]\033[0m In-place patched AGY binary (%s) in %v -> Active Header: %s", patchTarget, elapsed, patchedHeader)
 	}
 
 	args := []string{
@@ -455,23 +462,32 @@ func (m *HubManager) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 
-	shArgs := append([]string{"-c", `exec "$0" "$@"`, m.AgyBinPath}, args...)
-	cmd := exec.CommandContext(ctx, "sh", shArgs...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
 	// Set required environment variables for agy hub mode dynamically across all platforms
 	home, _ := os.UserHomeDir()
 	geminiBin := filepath.Join(home, ".gemini", "bin")
 	localBin := filepath.Join(home, ".local", "bin")
 	usrBin := filepath.Join(home, "..", "usr", "bin")
-	if prefix := os.Getenv("PREFIX"); prefix != "" {
+	usrLib := filepath.Join(home, "..", "usr", "lib")
+	prefix := os.Getenv("PREFIX")
+	if prefix != "" {
 		usrBin = filepath.Join(prefix, "bin")
+		usrLib = filepath.Join(prefix, "lib")
 	}
 
-	cmd.Env = append(os.Environ(),
+	var cleanEnv []string
+	for _, env := range os.Environ() {
+		// Strip LD_PRELOAD so termux-exec doesn't crash glibc loader
+		if strings.HasPrefix(env, "LD_PRELOAD=") {
+			continue
+		}
+		cleanEnv = append(cleanEnv, env)
+	}
+
+	cmdEnv := append(cleanEnv,
 		"HOME="+home,
 		"USERPROFILE="+home,
 		"PATH="+geminiBin+":"+localBin+":"+usrBin+":/usr/local/bin:/usr/bin:/bin:/system/bin:/system/xbin:"+os.Getenv("PATH"),
+		"LD_LIBRARY_PATH="+usrLib+":"+os.Getenv("LD_LIBRARY_PATH"),
 		"AGY_ENABLE_HUB=1",
 		"ANTIGRAVITY_VSCODE_HOST=1",
 		"ANTIGRAVITY_AUTH_SUCCESS_APP=vscode",
@@ -479,6 +495,35 @@ func (m *HubManager) Start() error {
 		"AGY_NO_UPDATE_PROMPT=1",
 		"DEBIAN_FRONTEND=noninteractive",
 	)
+	if prefix != "" {
+		cmdEnv = append(cmdEnv, "PREFIX="+prefix)
+	}
+
+	// Check if target is an ELF binary and needs glibc loader on Android
+	glibcLoader := filepath.Join(usrLib, "..", "glibc", "lib", "ld-linux-aarch64.so.1")
+	if prefix != "" {
+		glibcLoader = filepath.Join(prefix, "glibc", "lib", "ld-linux-aarch64.so.1")
+	}
+
+	isElf := false
+	if f, err := os.Open(m.AgyBinPath); err == nil {
+		buf := make([]byte, 4)
+		if n, _ := f.Read(buf); n == 4 && bytes.Equal(buf, []byte{0x7f, 'E', 'L', 'F'}) {
+			isElf = true
+		}
+		_ = f.Close()
+	}
+
+	var cmd *exec.Cmd
+	if isElf && fileExists(glibcLoader) {
+		loaderArgs := append([]string{"--library-path", filepath.Dir(glibcLoader), m.AgyBinPath}, args...)
+		cmd = exec.CommandContext(ctx, glibcLoader, loaderArgs...)
+	} else {
+		shArgs := append([]string{"-c", `exec "$0" "$@"`, m.AgyBinPath}, args...)
+		cmd = exec.CommandContext(ctx, "sh", shArgs...)
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = cmdEnv
 
 	stdoutPipe, errOut := cmd.StdoutPipe()
 	stderrPipe, errErr := cmd.StderrPipe()

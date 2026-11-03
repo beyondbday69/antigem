@@ -578,6 +578,110 @@ object LocalEnvironmentManager {
         }
     }
 
+    /** The app's Antigravity launcher: `$PREFIX/bin/agy` */
+    fun getAgyWrapperFile(context: Context): File = File(getBinDir(context), "agy")
+
+    /**
+     * Writes the Antigravity launcher. The official CLI binary is built for glibc, so on Android
+     * it must run through the bundled glibc loader (ld-linux-aarch64.so.1) with LD_PRELOAD unset.
+     */
+    fun ensureAgyWrapper(context: Context) {
+        if (!isTermuxPackage(context)) return
+        try {
+            val prefix = getPrefixDir(context).absolutePath
+            val home = getHomeDir(context).absolutePath
+            val bin = getBinDir(context)
+            if (!bin.exists()) return
+
+            val localBin = File(home, ".local/bin")
+            localBin.mkdirs()
+
+            val localAgy = File(localBin, "agy")
+            val localAgyVa39 = File(localBin, "agy.va39")
+            if (localAgy.exists() && !isSymlink(localAgy)) {
+                val isElf = try {
+                    val header = ByteArray(4)
+                    localAgy.inputStream().use { it.read(header) }
+                    header[0] == 0x7f.toByte() && header[1] == 'E'.code.toByte() && header[2] == 'L'.code.toByte() && header[3] == 'F'.code.toByte()
+                } catch (_: Exception) { false }
+
+                if (isElf && localAgy.length() > 5 * 1024 * 1024L) {
+                    if (localAgyVa39.exists()) localAgyVa39.delete()
+                    localAgy.renameTo(localAgyVa39)
+                    localAgyVa39.setExecutable(true, false)
+                    try { Os.chmod(localAgyVa39.absolutePath, 493) } catch (_: Exception) {}
+                }
+            }
+
+            val script = """
+                |#!$prefix/bin/bash
+                |# Antigravity (AGY) launcher written by AntiGem.
+                |PREFIX="$prefix"
+                |HOME="$home"
+                |GLIBC_LIB="$prefix/glibc/lib"
+                |LOADER="${'$'}GLIBC_LIB/ld-linux-aarch64.so.1"
+                |TARGET=""
+                |for cand in "$home/.local/bin/agy.va39" "$prefix/bin/agy.va39" "$home/.gemini/bin/agy.va39" "$home/.antigravity/bin/agy.va39" "$home/.local/bin/agy.elf" "$prefix/bin/agy.elf"; do
+                |    if [ -f "${'$'}cand" ] && [ -s "${'$'}cand" ]; then
+                |        TARGET="${'$'}cand"
+                |        break
+                |    fi
+                |done
+                |if [ -z "${'$'}TARGET" ]; then
+                |    for cand in "$home/.local/bin/agy" "$prefix/bin/agy" "$home/.gemini/bin/agy"; do
+                |        if [ -f "${'$'}cand" ] && [ -s "${'$'}cand" ] && [ "${'$'}cand" != "$prefix/bin/agy" ]; then
+                |            TARGET="${'$'}cand"
+                |            break
+                |        fi
+                |    done
+                |fi
+                |if [ -z "${'$'}TARGET" ]; then
+                |    echo "Antigravity binary (agy) not found in ~/.local/bin or $prefix/bin." >&2
+                |    exit 127
+                |fi
+                |unset LD_PRELOAD
+                |export LD_LIBRARY_PATH="$prefix/lib:${'$'}LD_LIBRARY_PATH"
+                |if [ -x "${'$'}LOADER" ]; then
+                |    exec "${'$'}LOADER" --library-path "${'$'}GLIBC_LIB" "${'$'}TARGET" "${'$'}@"
+                |else
+                |    exec "${'$'}TARGET" "${'$'}@"
+                |fi
+                |""".trimMargin()
+
+            val wrapper = getAgyWrapperFile(context)
+            if (!wrapper.exists() || isSymlink(wrapper) || wrapper.readText() != script) {
+                if (isSymlink(wrapper)) wrapper.delete()
+                val tmp = File(bin, ".agy.tmp")
+                tmp.writeText(script)
+                tmp.setExecutable(true, false)
+                tmp.setReadable(true, false)
+                try { Os.chmod(tmp.absolutePath, 493) } catch (_: Exception) {}
+                if (!tmp.renameTo(wrapper)) {
+                    wrapper.delete()
+                    tmp.renameTo(wrapper)
+                }
+                wrapper.setExecutable(true, false)
+                try { Os.chmod(wrapper.absolutePath, 493) } catch (_: Exception) {}
+            }
+
+            val localAgyLink = File(localBin, "agy")
+            if (localAgyVa39.exists()) {
+                if (localAgyLink.exists() && !isSymlink(localAgyLink)) {
+                    localAgyLink.delete()
+                }
+                val pointsToWrapper = try {
+                    Os.readlink(localAgyLink.absolutePath) == wrapper.absolutePath
+                } catch (_: Exception) { false }
+                if (!pointsToWrapper) {
+                    localAgyLink.delete()
+                    try { Os.symlink(wrapper.absolutePath, localAgyLink.absolutePath) } catch (_: Exception) {}
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "AGY launcher setup failed: ${e.message}")
+        }
+    }
+
     fun ensureTermuxApiDispatcher(context: Context) {
         try {
             val prefix = getPrefixDir(context).absolutePath
@@ -1522,7 +1626,11 @@ object LocalEnvironmentManager {
                                     }
                                     val symlinkTarget = zip.getUnixSymlink(entry)
                                     if (!symlinkTarget.isNullOrBlank()) {
-                                        Os.symlink(symlinkTarget, targetFile.absolutePath)
+                                        val newPkgPath = appContext.filesDir.parentFile?.absolutePath ?: "/data/data/${appContext.packageName}"
+                                        val fixedTarget = symlinkTarget
+                                            .replace("/data/data/com.termux", newPkgPath)
+                                            .replace("/data/user/0/com.termux", newPkgPath)
+                                        Os.symlink(fixedTarget, targetFile.absolutePath)
                                     }
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Failed creating embedded symlink for $rawName: ${e.message}")
@@ -1635,7 +1743,11 @@ object LocalEnvironmentManager {
                                         linkFile.setWritable(true, true)
                                         try { linkFile.delete() } catch (_: Exception) {}
                                     }
-                                    Os.symlink(target, linkFile.absolutePath)
+                                    val newPkgPath = appContext.filesDir.parentFile?.absolutePath ?: "/data/data/${appContext.packageName}"
+                                    val fixedTarget = target
+                                        .replace("/data/data/com.termux", newPkgPath)
+                                        .replace("/data/user/0/com.termux", newPkgPath)
+                                    Os.symlink(fixedTarget, linkFile.absolutePath)
                                 }
                             } catch (e: Exception) {
                                 Log.w(TAG, "Error creating symlink for $linkRelPath -> $target: ${e.message}")
@@ -1868,6 +1980,10 @@ object LocalEnvironmentManager {
 
         if (!ldLinux.exists()) {
             extractGlibcMinAsset(context, prefixDir)
+        }
+        if (ldLinux.exists()) {
+            ldLinux.setExecutable(true, false)
+            try { Os.chmod(ldLinux.absolutePath, 493) } catch (_: Exception) {}
         }
 
         // Configure Glibc DNS & NSS resolver
@@ -2148,6 +2264,51 @@ object LocalEnvironmentManager {
             }
         } catch (_: Exception) {}
 
+        // Self-heal symlinks and script shebangs pointing to old package com.termux
+        try {
+            val oldPkgPaths = listOf("/data/data/com.termux", "/data/user/0/com.termux")
+            val newPkgPath = context.filesDir.parentFile?.absolutePath ?: "/data/data/${context.packageName}"
+
+            fun fixBrokenLinksAndShebangs(dir: File, maxDepth: Int) {
+                if (!dir.exists() || maxDepth <= 0) return
+                dir.listFiles()?.forEach { f ->
+                    try {
+                        if (isSymlink(f)) {
+                            val target = Os.readlink(f.absolutePath)
+                            if (oldPkgPaths.any { target.contains(it) }) {
+                                var newTarget = target
+                                for (old in oldPkgPaths) {
+                                    newTarget = newTarget.replace(old, newPkgPath)
+                                }
+                                f.delete()
+                                Os.symlink(newTarget, f.absolutePath)
+                            }
+                        } else if (f.isDirectory) {
+                            fixBrokenLinksAndShebangs(f, maxDepth - 1)
+                        } else if (f.isFile && dir == binDir) {
+                            if (f.length() in 1..65536) {
+                                val firstLine = f.bufferedReader().use { it.readLine() }
+                                if (firstLine != null && firstLine.startsWith("#!") && oldPkgPaths.any { firstLine.contains(it) }) {
+                                    val content = f.readText()
+                                    var newContent = content
+                                    for (old in oldPkgPaths) {
+                                        newContent = newContent.replace(old, newPkgPath)
+                                    }
+                                    f.writeText(newContent)
+                                    f.setExecutable(true, false)
+                                    try { Os.chmod(f.absolutePath, 493) } catch (_: Exception) {}
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+
+            fixBrokenLinksAndShebangs(binDir, 1)
+            fixBrokenLinksAndShebangs(File(prefixDir, "lib"), 2)
+            fixBrokenLinksAndShebangs(File(homeDir, ".local/bin"), 1)
+        } catch (_: Exception) {}
+
         // Ensure a working sh fallback exists if not present in archive
         if (!shFile.exists() || !shFile.canExecute()) {
             if (bashFile.exists() && bashFile.canExecute()) {
@@ -2177,6 +2338,7 @@ object LocalEnvironmentManager {
 export PREFIX="${prefixDir.absolutePath}"
 export HOME="${homeDir.absolutePath}"
 export PATH="${homeDir.absolutePath}/.local/bin:${binDir.absolutePath}:${binDir.absolutePath}/applets:/system/bin:/system/xbin"
+export LD_LIBRARY_PATH="${prefixDir.absolutePath}/lib:${binDir.absolutePath}"
 export TMPDIR="${prefixDir.absolutePath}/tmp"
 export TERM="xterm-256color"
 export COLORTERM="truecolor"
@@ -2199,6 +2361,13 @@ PS1='\[\033[01;32m\]gemini\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 """.trimIndent()
             )
             try { Os.chmod(bashrc.absolutePath, 420) } catch (_: Exception) {} // 0644
+        } else {
+            try {
+                val content = bashrc.readText()
+                if (!content.contains("LD_LIBRARY_PATH")) {
+                    bashrc.appendText("\nexport LD_LIBRARY_PATH=\"${prefixDir.absolutePath}/lib:${binDir.absolutePath}\"\n")
+                }
+            } catch (_: Exception) {}
         }
 
         val profile = File(homeDir, ".profile")
@@ -2219,6 +2388,7 @@ fi
                 """export PREFIX="${prefixDir.absolutePath}"
 export HOME="${homeDir.absolutePath}"
 export PATH="${homeDir.absolutePath}/.local/bin:${binDir.absolutePath}:${binDir.absolutePath}/applets:/system/bin:/system/xbin"
+export LD_LIBRARY_PATH="${prefixDir.absolutePath}/lib:${binDir.absolutePath}"
 export TMPDIR="${prefixDir.absolutePath}/tmp"
 export TERM="xterm-256color"
 export COLORTERM="truecolor"
@@ -2232,6 +2402,13 @@ export LC_ALL="en_US.UTF-8"
 """.trimIndent()
             )
             try { Os.chmod(etcProfile.absolutePath, 420) } catch (_: Exception) {} // 0644
+        } else {
+            try {
+                val content = etcProfile.readText()
+                if (!content.contains("LD_LIBRARY_PATH")) {
+                    etcProfile.appendText("\nexport LD_LIBRARY_PATH=\"${prefixDir.absolutePath}/lib:${binDir.absolutePath}\"\n")
+                }
+            } catch (_: Exception) {}
         }
 
         // Ensure standard DNS resolution files exist in $PREFIX/etc if missing
@@ -2321,6 +2498,12 @@ All files created here persist inside the application.
                 Log.w(TAG, "Failed to run ssh-keygen -A: ${e.message}")
             }
         }
+
+        // Ensure runtime wrappers and glibc environment are up to date
+        ensureGlibcEnvironment(context)
+        ensureAgyWrapper(context)
+        ensureClaudeWrapper(context)
+        ensureTermuxApiDispatcher(context)
     }
 
     suspend fun executeCommand(
@@ -2459,6 +2642,7 @@ All files created here persist inside the application.
             env["PREFIX"] = prefix.absolutePath
             env["HOME"] = home.absolutePath
             env["PATH"] = "${home.absolutePath}/.local/bin:${bin.absolutePath}:${bin.absolutePath}/applets:/system/bin:/system/xbin"
+            env["LD_LIBRARY_PATH"] = "${lib.absolutePath}:${bin.absolutePath}"
             env["TMPDIR"] = tmp.absolutePath
             env["TERM"] = "xterm-256color"
             env["COLORTERM"] = "truecolor"

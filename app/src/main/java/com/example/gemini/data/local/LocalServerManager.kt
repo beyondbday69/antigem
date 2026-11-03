@@ -81,6 +81,7 @@ object LocalServerManager {
             tempFile.renameTo(targetFile)
             targetFile.setExecutable(true, false)
             targetFile.setReadable(true, false)
+            try { android.system.Os.chmod(targetFile.absolutePath, 493) } catch (_: Exception) {}
         }
     }
 
@@ -221,6 +222,14 @@ object LocalServerManager {
 
         val homeDir = LocalEnvironmentManager.getHomeDir(context)
         val binDir = LocalEnvironmentManager.getBinDir(context)
+
+        val resolvedBridgeCmd = when {
+            File(binDir, "agy_ide_bridge").exists() -> File(binDir, "agy_ide_bridge").absolutePath
+            bridgeCmd.startsWith("~/") -> File(homeDir, bridgeCmd.removePrefix("~/")).absolutePath
+            bridgeCmd.startsWith("/") -> bridgeCmd
+            else -> File(binDir, bridgeCmd).absolutePath
+        }
+
         val resolvedAgyFile = when {
             agyCmd.startsWith("~/") -> File(homeDir, agyCmd.removePrefix("~/"))
             agyCmd.startsWith("/") -> File(agyCmd)
@@ -230,7 +239,7 @@ object LocalServerManager {
         val prefixAgy = File(binDir, "agy")
 
         val binParam = when {
-            agyCmd.isNotBlank() && resolvedAgyFile.exists() -> " --bin \"$agyCmd\""
+            agyCmd.isNotBlank() && resolvedAgyFile.exists() -> " --bin \"${resolvedAgyFile.absolutePath}\""
             defaultHomeAgy.exists() -> " --bin \"${defaultHomeAgy.absolutePath}\""
             prefixAgy.exists() -> " --bin \"${prefixAgy.absolutePath}\""
             else -> ""
@@ -245,7 +254,7 @@ object LocalServerManager {
         // agents switched off in the app never run (no AGY hub / no Claude Code endpoints)
         val agentFlags = com.example.gemini.data.agent.AgentPreferences.bridgeFlags(context)
 
-        return "$bridgeCmd -f --token $token -p $bridgePort --hub-port $hubPort --tz-offset $tzOffset$binParam$claudeBinParam$agentFlags"
+        return "$resolvedBridgeCmd -f --token $token -p $bridgePort --hub-port $hubPort --tz-offset $tzOffset$binParam$claudeBinParam$agentFlags"
     }
 
     /**
@@ -344,8 +353,9 @@ object LocalServerManager {
 
         val appContext = context.applicationContext
         ensureBridgeBinary(appContext)
-        // the bridge starts Claude Code through the app's launcher (--claude-bin)
+        // the bridge starts Claude Code and Antigravity through the app's launchers
         LocalEnvironmentManager.ensureGlibcEnvironment(appContext)
+        LocalEnvironmentManager.ensureAgyWrapper(appContext)
         LocalEnvironmentManager.ensureClaudeWrapper(appContext)
 
         val command = resolveServerCommand(appContext)

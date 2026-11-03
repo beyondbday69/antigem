@@ -264,6 +264,7 @@ class LocalPtySession(
                 val tmp = LocalEnvironmentManager.getTmpDir(context)
 
                 LocalEnvironmentManager.ensureGlibcEnvironment(context)
+                LocalEnvironmentManager.ensureAgyWrapper(context)
                 LocalEnvironmentManager.ensureClaudeWrapper(context)
                 LocalEnvironmentManager.ensureTermuxApiDispatcher(context)
 
@@ -315,6 +316,7 @@ class LocalPtySession(
                 envMap["PREFIX"] = prefix.absolutePath
                 envMap["HOME"] = home.absolutePath
                 envMap["PATH"] = "${home.absolutePath}/.local/bin:${bin.absolutePath}:${bin.absolutePath}/applets:/system/bin:/system/xbin"
+                envMap["LD_LIBRARY_PATH"] = "${lib.absolutePath}:${bin.absolutePath}"
                 envMap["TMPDIR"] = tmp.absolutePath
                 envMap["TERM"] = "xterm-256color"
                 envMap["COLORTERM"] = "truecolor"

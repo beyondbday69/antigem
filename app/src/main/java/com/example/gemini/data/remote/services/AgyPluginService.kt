@@ -202,6 +202,9 @@ class AgyPluginService(
                         if (!envMap.containsKey("LD_PRELOAD") && libExec.exists()) {
                             envMap["LD_PRELOAD"] = libExec.absolutePath
                         }
+                        if (!envMap.containsKey("LD_LIBRARY_PATH")) {
+                            envMap["LD_LIBRARY_PATH"] = "$prefixPath/lib"
+                        }
                         if (!envMap.containsKey("PATH")) {
                             envMap["PATH"] = "$homePath/.local/bin:$prefixPath/bin:/system/bin"
                         }
