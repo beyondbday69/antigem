@@ -235,10 +235,14 @@ object LocalServerManager {
             agyCmd.startsWith("/") -> File(agyCmd)
             else -> File(binDir, agyCmd)
         }
+        val homeAgyVa39 = File(homeDir, ".local/bin/agy.va39")
+        val prefixAgyVa39 = File(binDir, "agy.va39")
         val defaultHomeAgy = File(homeDir, ".local/bin/agy")
         val prefixAgy = File(binDir, "agy")
 
         val binParam = when {
+            homeAgyVa39.exists() -> " --bin \"${homeAgyVa39.absolutePath}\""
+            prefixAgyVa39.exists() -> " --bin \"${prefixAgyVa39.absolutePath}\""
             agyCmd.isNotBlank() && resolvedAgyFile.exists() -> " --bin \"${resolvedAgyFile.absolutePath}\""
             defaultHomeAgy.exists() -> " --bin \"${defaultHomeAgy.absolutePath}\""
             prefixAgy.exists() -> " --bin \"${prefixAgy.absolutePath}\""

@@ -598,18 +598,54 @@ object LocalEnvironmentManager {
 
             val localAgy = File(localBin, "agy")
             val localAgyVa39 = File(localBin, "agy.va39")
-            if (localAgy.exists() && !isSymlink(localAgy)) {
-                val isElf = try {
+            val prefixAgy = File(bin, "agy")
+            val prefixAgyVa39 = File(bin, "agy.va39")
+
+            fun isElfBinary(f: File): Boolean {
+                if (!f.exists() || isSymlink(f) || f.length() < 100 * 1024L) return false
+                return try {
                     val header = ByteArray(4)
-                    localAgy.inputStream().use { it.read(header) }
+                    f.inputStream().use { it.read(header) }
                     header[0] == 0x7f.toByte() && header[1] == 'E'.code.toByte() && header[2] == 'L'.code.toByte() && header[3] == 'F'.code.toByte()
                 } catch (_: Exception) { false }
+            }
 
-                if (isElf && localAgy.length() > 5 * 1024 * 1024L) {
-                    if (localAgyVa39.exists()) localAgyVa39.delete()
-                    localAgy.renameTo(localAgyVa39)
-                    localAgyVa39.setExecutable(true, false)
-                    try { Os.chmod(localAgyVa39.absolutePath, 493) } catch (_: Exception) {}
+            // 1. If prefix/bin/agy is a real ELF binary, preserve it as agy.va39 before writing wrapper
+            if (isElfBinary(prefixAgy)) {
+                if (prefixAgyVa39.exists()) prefixAgyVa39.delete()
+                prefixAgy.renameTo(prefixAgyVa39)
+                prefixAgyVa39.setExecutable(true, false)
+                try { Os.chmod(prefixAgyVa39.absolutePath, 493) } catch (_: Exception) {}
+            }
+
+            // 2. If ~/.local/bin/agy is a real ELF binary, preserve it as agy.va39
+            if (isElfBinary(localAgy)) {
+                if (localAgyVa39.exists()) localAgyVa39.delete()
+                localAgy.renameTo(localAgyVa39)
+                localAgyVa39.setExecutable(true, false)
+                try { Os.chmod(localAgyVa39.absolutePath, 493) } catch (_: Exception) {}
+            }
+
+            // 3. Auto-discover from public Downloads folder or legacy Termux path if not present
+            if (!localAgyVa39.exists() && !prefixAgyVa39.exists()) {
+                val downloadCandidates = listOf(
+                    File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "agy.va39"),
+                    File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "agy"),
+                    File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "Antigem/agy.va39"),
+                    File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "Antigem/agy"),
+                    File("/data/data/com.termux/files/usr/bin/agy.va39"),
+                    File("/data/data/com.termux/files/home/.local/bin/agy.va39")
+                )
+                for (cand in downloadCandidates) {
+                    try {
+                        if (cand.exists() && (cand.name.endsWith(".va39") || isElfBinary(cand))) {
+                            cand.copyTo(localAgyVa39, overwrite = true)
+                            localAgyVa39.setExecutable(true, false)
+                            try { Os.chmod(localAgyVa39.absolutePath, 493) } catch (_: Exception) {}
+                            Log.i(TAG, "Discovered and imported agy binary from ${cand.absolutePath} to ${localAgyVa39.absolutePath}")
+                            break
+                        }
+                    } catch (_: Exception) {}
                 }
             }
 
@@ -621,26 +657,41 @@ object LocalEnvironmentManager {
                 |GLIBC_LIB="$prefix/glibc/lib"
                 |LOADER="${'$'}GLIBC_LIB/ld-linux-aarch64.so.1"
                 |TARGET=""
+                |
+                |# 1. Search for dedicated ELF binaries (.va39 / .elf)
                 |for cand in "$home/.local/bin/agy.va39" "$prefix/bin/agy.va39" "$home/.gemini/bin/agy.va39" "$home/.antigravity/bin/agy.va39" "$home/.local/bin/agy.elf" "$prefix/bin/agy.elf"; do
                 |    if [ -f "${'$'}cand" ] && [ -s "${'$'}cand" ]; then
                 |        TARGET="${'$'}cand"
                 |        break
                 |    fi
                 |done
+                |
+                |# 2. Check general candidates ensuring we NEVER target this script or its symlink
                 |if [ -z "${'$'}TARGET" ]; then
-                |    for cand in "$home/.local/bin/agy" "$prefix/bin/agy" "$home/.gemini/bin/agy"; do
-                |        if [ -f "${'$'}cand" ] && [ -s "${'$'}cand" ] && [ "${'$'}cand" != "$prefix/bin/agy" ]; then
-                |            TARGET="${'$'}cand"
-                |            break
+                |    WRAPPER_REAL="${'$'}(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")"
+                |    for cand in "$home/.local/bin/agy" "$prefix/bin/agy" "$home/.gemini/bin/agy" "$home/.antigravity/bin/agy"; do
+                |        if [ -f "${'$'}cand" ] && [ -s "${'$'}cand" ]; then
+                |            CAND_REAL="${'$'}(realpath "${'$'}cand" 2>/dev/null || readlink -f "${'$'}cand" 2>/dev/null || echo "${'$'}cand")"
+                |            if [ "${'$'}CAND_REAL" != "${'$'}WRAPPER_REAL" ] && [ "${'$'}cand" != "$prefix/bin/agy" ]; then
+                |                # Verify cand is an actual ELF binary (magic 0x7F E L F)
+                |                MAGIC="${'$'}(head -c 4 "${'$'}cand" 2>/dev/null)"
+                |                if [ "${'$'}MAGIC" = $'\\x7fELF' ]; then
+                |                    TARGET="${'$'}cand"
+                |                    break
+                |                fi
+                |            fi
                 |        fi
                 |    done
                 |fi
+                |
                 |if [ -z "${'$'}TARGET" ]; then
-                |    echo "Antigravity binary (agy) not found in ~/.local/bin or $prefix/bin." >&2
+                |    echo "Antigravity CLI binary (agy.va39) not found in ~/.local/bin or $prefix/bin." >&2
+                |    echo "Please place the arm64 agy executable at ~/.local/bin/agy.va39 or in your Download folder as agy.va39" >&2
                 |    exit 127
                 |fi
+                |
                 |unset LD_PRELOAD
-                |export LD_LIBRARY_PATH="$prefix/lib:${'$'}LD_LIBRARY_PATH"
+                |export LD_LIBRARY_PATH="$prefix/lib:${'$'}GLIBC_LIB:${'$'}LD_LIBRARY_PATH"
                 |if [ -x "${'$'}LOADER" ]; then
                 |    exec "${'$'}LOADER" --library-path "${'$'}GLIBC_LIB" "${'$'}TARGET" "${'$'}@"
                 |else
@@ -665,16 +716,15 @@ object LocalEnvironmentManager {
             }
 
             val localAgyLink = File(localBin, "agy")
-            if (localAgyVa39.exists()) {
-                if (localAgyLink.exists() && !isSymlink(localAgyLink)) {
-                    localAgyLink.delete()
-                }
-                val pointsToWrapper = try {
-                    Os.readlink(localAgyLink.absolutePath) == wrapper.absolutePath
-                } catch (_: Exception) { false }
-                if (!pointsToWrapper) {
-                    localAgyLink.delete()
-                    try { Os.symlink(wrapper.absolutePath, localAgyLink.absolutePath) } catch (_: Exception) {}
+            if (wrapper.exists()) {
+                if (!isElfBinary(localAgyLink)) {
+                    val pointsToWrapper = try {
+                        Os.readlink(localAgyLink.absolutePath) == wrapper.absolutePath
+                    } catch (_: Exception) { false }
+                    if (!pointsToWrapper) {
+                        localAgyLink.delete()
+                        try { Os.symlink(wrapper.absolutePath, localAgyLink.absolutePath) } catch (_: Exception) {}
+                    }
                 }
             }
         } catch (e: Exception) {

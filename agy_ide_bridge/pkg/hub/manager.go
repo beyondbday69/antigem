@@ -71,21 +71,38 @@ func FindAllAgyBinaries() []string {
 	var rawCandidates []string
 	if home != "" {
 		rawCandidates = append(rawCandidates,
+			filepath.Join(home, ".local", "bin", "agy.va39"),
 			filepath.Join(home, ".local", "bin", "agy"),
+			filepath.Join(home, ".gemini", "bin", "agy.va39"),
 			filepath.Join(home, ".gemini", "bin", "agy"),
+			filepath.Join(home, ".antigravity", "bin", "agy.va39"),
 			filepath.Join(home, ".antigravity", "bin", "agy"),
+			filepath.Join(home, "usr", "bin", "agy.va39"),
 			filepath.Join(home, "usr", "bin", "agy"),
+			filepath.Join(home, "..", "usr", "bin", "agy.va39"),
 			filepath.Join(home, "..", "usr", "bin", "agy"),
 		)
 	}
 	if prefix := os.Getenv("PREFIX"); prefix != "" {
-		rawCandidates = append(rawCandidates, filepath.Join(prefix, "bin", "agy"))
+		rawCandidates = append(rawCandidates,
+			filepath.Join(prefix, "bin", "agy.va39"),
+			filepath.Join(prefix, "bin", "agy"),
+		)
 	}
 	rawCandidates = append(rawCandidates,
+		"/data/data/com.antigem/files/usr/bin/agy.va39",
 		"/data/data/com.antigem/files/usr/bin/agy",
+		"/data/data/com.antigem/files/home/.local/bin/agy.va39",
 		"/data/data/com.antigem/files/home/.local/bin/agy",
+		"/data/data/com.antigem/files/home/.gemini/bin/agy.va39",
 		"/data/data/com.antigem/files/home/.gemini/bin/agy",
+		"/sdcard/Download/agy.va39",
+		"/sdcard/Download/agy",
+		"/sdcard/Download/Antigem/agy.va39",
+		"/sdcard/Download/Antigem/agy",
+		"/data/data/com.termux/files/usr/bin/agy.va39",
 		"/data/data/com.termux/files/usr/bin/agy",
+		"/data/data/com.termux/files/home/.local/bin/agy.va39",
 		"/data/data/com.termux/files/home/.local/bin/agy",
 		"/data/data/com.termux/files/home/.gemini/bin/agy",
 		"/usr/local/bin/agy",
@@ -177,7 +194,7 @@ func ResolveAgyBinary() string {
 }
 
 // ResolvePatchTarget determines the target binary for CSRF header patching.
-// If the selected binary is < 10 MB (wrapper script), it checks for agy.va39 in the same directory.
+// If the selected binary is < 10 MB (wrapper script), it checks for agy.va39 in the same directory or search paths.
 func ResolvePatchTarget(binPath string) string {
 	if binPath == "" {
 		return ""
@@ -192,6 +209,15 @@ func ResolvePatchTarget(binPath string) string {
 	companion := filepath.Join(dir, "agy.va39")
 	if fi2, err2 := os.Stat(companion); err2 == nil && !fi2.IsDir() && fi2.Size() >= 10*1024*1024 {
 		return companion
+	}
+
+	// Search other candidate binaries
+	for _, cand := range FindAllAgyBinaries() {
+		if strings.HasSuffix(cand, ".va39") {
+			if fic, errc := os.Stat(cand); errc == nil && !fic.IsDir() && fic.Size() >= 10*1024*1024 {
+				return cand
+			}
+		}
 	}
 
 	return binPath
@@ -214,22 +240,16 @@ func NewHubManager(hubPort, workspaceDir, appDataDir, securityToken, agyBinPath 
 	}
 }
 
-// isHubReady probes if port 1235 is active and accepting connections, logging probe details for debugging
+// isHubReady probes if port 1235 is active and accepting connections
 func (m *HubManager) isHubReady() bool {
 	if m.Disabled {
 		return false
 	}
-	start := time.Now()
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+m.HubPort, 400*time.Millisecond)
-	elapsed := time.Since(start)
-
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+m.HubPort, 350*time.Millisecond)
 	if err != nil {
-		log.Printf("\033[90m[Hub Probe] 127.0.0.1:%s -> Not connected (%v in %v) | Assumed state: offline\033[0m", m.HubPort, err, elapsed)
 		return false
 	}
 	_ = conn.Close()
-
-	log.Printf("\033[32m[Hub Probe] 127.0.0.1:%s -> TCP Connected OK in %v | Assumed state: ONLINE\033[0m", m.HubPort, elapsed)
 	return true
 }
 
@@ -331,10 +351,10 @@ func (m *HubManager) setStatusLocked(status string, errorMsg string) {
 func (m *HubManager) StartContinuousMonitor() {
 	go func() {
 		for {
-			interval := 1 * time.Second
+			interval := 2 * time.Second
 			m.mu.Lock()
 			if m.status == HubStatusOnline && m.csrfToken != "" {
-				interval = 10 * time.Second
+				interval = 8 * time.Second
 			}
 			m.mu.Unlock()
 
@@ -428,16 +448,19 @@ func (m *HubManager) Start() error {
 		return err
 	}
 
+	targetBin := m.AgyBinPath
+	patchTarget := ResolvePatchTarget(m.AgyBinPath)
+	if patchTarget != "" && fileExists(patchTarget) {
+		targetBin = patchTarget
+	}
+
 	// In-place patch AGY binary with 20-byte framed security header (Strict Fail-Closed Security)
-	if m.SecurityToken != "" {
-		patchTarget := ResolvePatchTarget(m.AgyBinPath)
-		if patchTarget != "" {
-			patchedHeader, elapsed, err := security.PatchAgyHeader(patchTarget, m.SecurityToken)
-			if err != nil {
-				log.Printf("\033[1;33m[Security Warning]\033[0m Patch AGY binary (%s) skipped: %v. Proceeding with standard header...", patchTarget, err)
-			} else {
-				log.Printf("\033[1;32m[Security]\033[0m In-place patched AGY binary (%s) in %v -> Active Header: %s", patchTarget, elapsed, patchedHeader)
-			}
+	if m.SecurityToken != "" && patchTarget != "" {
+		patchedHeader, elapsed, err := security.PatchAgyHeader(patchTarget, m.SecurityToken)
+		if err != nil {
+			log.Printf("\033[1;33m[Security Warning]\033[0m Patch AGY binary (%s) skipped: %v. Proceeding with standard header...", patchTarget, err)
+		} else {
+			log.Printf("\033[1;32m[Security]\033[0m In-place patched AGY binary (%s) in %v -> Active Header: %s", patchTarget, elapsed, patchedHeader)
 		}
 	}
 
@@ -483,11 +506,24 @@ func (m *HubManager) Start() error {
 		cleanEnv = append(cleanEnv, env)
 	}
 
+	// Check if target is an ELF binary and needs glibc loader on Android
+	glibcLoader := filepath.Join(usrLib, "..", "glibc", "lib", "ld-linux-aarch64.so.1")
+	glibcLib := filepath.Join(usrLib, "..", "glibc", "lib")
+	if prefix != "" {
+		glibcLoader = filepath.Join(prefix, "glibc", "lib", "ld-linux-aarch64.so.1")
+		glibcLib = filepath.Join(prefix, "glibc", "lib")
+	}
+
+	ldLibPath := usrLib + ":" + glibcLib
+	if existingLd := os.Getenv("LD_LIBRARY_PATH"); existingLd != "" {
+		ldLibPath += ":" + existingLd
+	}
+
 	cmdEnv := append(cleanEnv,
 		"HOME="+home,
 		"USERPROFILE="+home,
 		"PATH="+geminiBin+":"+localBin+":"+usrBin+":/usr/local/bin:/usr/bin:/bin:/system/bin:/system/xbin:"+os.Getenv("PATH"),
-		"LD_LIBRARY_PATH="+usrLib+":"+os.Getenv("LD_LIBRARY_PATH"),
+		"LD_LIBRARY_PATH="+ldLibPath,
 		"AGY_ENABLE_HUB=1",
 		"ANTIGRAVITY_VSCODE_HOST=1",
 		"ANTIGRAVITY_AUTH_SUCCESS_APP=vscode",
@@ -499,14 +535,8 @@ func (m *HubManager) Start() error {
 		cmdEnv = append(cmdEnv, "PREFIX="+prefix)
 	}
 
-	// Check if target is an ELF binary and needs glibc loader on Android
-	glibcLoader := filepath.Join(usrLib, "..", "glibc", "lib", "ld-linux-aarch64.so.1")
-	if prefix != "" {
-		glibcLoader = filepath.Join(prefix, "glibc", "lib", "ld-linux-aarch64.so.1")
-	}
-
 	isElf := false
-	if f, err := os.Open(m.AgyBinPath); err == nil {
+	if f, err := os.Open(targetBin); err == nil {
 		buf := make([]byte, 4)
 		if n, _ := f.Read(buf); n == 4 && bytes.Equal(buf, []byte{0x7f, 'E', 'L', 'F'}) {
 			isElf = true
@@ -516,10 +546,10 @@ func (m *HubManager) Start() error {
 
 	var cmd *exec.Cmd
 	if isElf && fileExists(glibcLoader) {
-		loaderArgs := append([]string{"--library-path", filepath.Dir(glibcLoader), m.AgyBinPath}, args...)
+		loaderArgs := append([]string{"--library-path", filepath.Dir(glibcLoader), targetBin}, args...)
 		cmd = exec.CommandContext(ctx, glibcLoader, loaderArgs...)
 	} else {
-		shArgs := append([]string{"-c", `exec "$0" "$@"`, m.AgyBinPath}, args...)
+		shArgs := append([]string{"-c", `exec "$0" "$@"`, targetBin}, args...)
 		cmd = exec.CommandContext(ctx, "sh", shArgs...)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -532,7 +562,7 @@ func (m *HubManager) Start() error {
 		cancel()
 		m.setStatusLocked(HubStatusError, err.Error())
 		m.mu.Unlock()
-		return fmt.Errorf("failed to start agy hub via sh: %w", err)
+		return fmt.Errorf("failed to start agy hub: %w", err)
 	}
 
 	m.cmd = cmd
@@ -592,19 +622,15 @@ func (m *HubManager) Start() error {
 	spinIdx := 0
 	ready := false
 	startTime := time.Now()
-	timeout := 5 * time.Minute
+	timeout := 2 * time.Minute
 
 	for time.Since(startTime) < timeout {
-		if !m.IsRunning() {
-			return nil
-		}
-
 		select {
 		case err := <-processExited:
 			fmt.Printf("\r\033[K \033[31m[✗]\033[0m AGY Hub process terminated: %v\n", err)
 			m.dumpRecentLogs()
 			m.setStatus(HubStatusError, fmt.Sprintf("Process exited: %v", err))
-			return fmt.Errorf("agy hub process exited unexpectedly: %w", err)
+			return fmt.Errorf("agy hub process exited: %w", err)
 		default:
 		}
 
@@ -612,6 +638,22 @@ func (m *HubManager) Start() error {
 			ready = true
 			break
 		}
+
+		if !m.IsRunning() {
+			select {
+			case err := <-processExited:
+				fmt.Printf("\r\033[K \033[31m[✗]\033[0m AGY Hub process terminated: %v\n", err)
+				m.dumpRecentLogs()
+				m.setStatus(HubStatusError, fmt.Sprintf("Process exited: %v", err))
+				return fmt.Errorf("agy hub process exited: %w", err)
+			default:
+				fmt.Printf("\r\033[K \033[31m[✗]\033[0m AGY Hub process stopped\n")
+				m.dumpRecentLogs()
+				m.setStatus(HubStatusError, "AGY process stopped unexpectedly")
+				return fmt.Errorf("agy hub process stopped unexpectedly")
+			}
+		}
+
 		fmt.Printf("\r\033[K \033[36m[%s]\033[0m Starting AGY Hub on port %s...", spinner[spinIdx%len(spinner)], m.HubPort)
 		spinIdx++
 		time.Sleep(1 * time.Second)
