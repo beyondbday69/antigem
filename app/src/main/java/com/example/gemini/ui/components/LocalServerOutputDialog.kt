@@ -39,7 +39,8 @@ import kotlin.math.roundToInt
 
 @Composable
 fun LocalServerOutputDialog(
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSignIn: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val status by LocalServerManager.status.collectAsState()
@@ -165,6 +166,22 @@ fun LocalServerOutputDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        // Quick Login to Antigravity button
+                        if (onSignIn != null) {
+                            FilledTonalButton(
+                                onClick = onSignIn,
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = ClaudeTerracotta.copy(alpha = 0.2f),
+                                    contentColor = ClaudeTerracotta
+                                ),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("Login", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
                         // Restart / Start Button
                         IconButton(
                             onClick = { LocalServerManager.restartServer(context) },

@@ -172,6 +172,7 @@ fun ChatInputBar(
     cascadeId: String = "",
     isOnline: Boolean = true,
     isAuth: Boolean = true,
+    onSignInClick: (() -> Unit)? = null,
     /** Shown when sending is blocked because [isOnline] is false. */
     offlineMessage: String = "Server is offline. Start the server to send messages.",
     /** The agent cannot read audio (Claude): the mic records and transcribes to text instead of attaching a file. */
@@ -515,6 +516,7 @@ fun ChatInputBar(
                     if (andSend) {
                         if (!isAuth) {
                             Toast.makeText(context, "Please sign in first to send messages.", Toast.LENGTH_SHORT).show()
+                            onSignInClick?.invoke()
                         } else {
                             onSendMessage(combined.trim())
                             onTextFieldValueChange(TextFieldValue(""))
@@ -562,6 +564,7 @@ fun ChatInputBar(
             if (andSend) {
                 if (!isAuth) {
                     Toast.makeText(context, "Please sign in first to send messages.", Toast.LENGTH_SHORT).show()
+                    onSignInClick?.invoke()
                     onAddAttachment(att)
                 } else {
                     onAddAttachment(att)
@@ -1227,6 +1230,7 @@ fun ChatInputBar(
                                     val trimmed = textFieldValue.text.trim()
                                         if (!isAuth) {
                                             Toast.makeText(context, "Please sign in first to send messages.", Toast.LENGTH_SHORT).show()
+                                            onSignInClick?.invoke()
                                             return@Surface
                                         }
                                         if (!isOnline) {

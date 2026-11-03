@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	loginURLRegex   = regexp.MustCompile(`https://accounts\.google\.com/[^\s"'<>]+`)
+	loginURLRegex   = regexp.MustCompile(`https?://(?:accounts\.google\.com|oauth2\.googleapis\.com)/[^\s"'<>]+`)
 	csrfJSONPattern = regexp.MustCompile(`"csrfToken":\s*"([^"]+)"`)
 	csrfHTMLPattern = regexp.MustCompile(`(?i)(?:csrf[_-]?token|csrfToken)["']?\s*[:=]\s*["']([^"']+)["']`)
 )
@@ -779,13 +779,11 @@ func (m *HubManager) handleHubLine(line string) {
 
 	fmt.Printf("\r\033[K\033[90m[agy-hub]\033[0m %s\n", line)
 
-	if m.OnLoginURL != nil && strings.Contains(trimmed, "accounts.google.com") {
+	if m.OnLoginURL != nil && (strings.Contains(trimmed, "accounts.google.com") || strings.Contains(trimmed, "oauth2.googleapis.com")) {
 		matches := loginURLRegex.FindAllString(trimmed, -1)
 		for _, u := range matches {
-			if strings.HasPrefix(u, "https://accounts.google.com") {
-				fmt.Printf(" \033[1;32m[auth-url detected]\033[0m %s\n", u)
-				m.OnLoginURL(u)
-			}
+			fmt.Printf(" \033[1;32m[auth-url detected]\033[0m %s\n", u)
+			m.OnLoginURL(u)
 		}
 	}
 }

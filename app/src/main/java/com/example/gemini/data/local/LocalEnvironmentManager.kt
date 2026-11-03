@@ -879,6 +879,27 @@ object LocalEnvironmentManager {
             dispatcherFile.writeText(scriptContent)
             dispatcherFile.setExecutable(true, false)
             dispatcherFile.setReadable(true, false)
+
+            val binDir = getBinDir(context)
+            if (!binDir.exists()) binDir.mkdirs()
+            val xdgOpenContent = """
+                #!$prefix/bin/bash
+                TARGET="${'$'}1"
+                if [ -z "${'$'}TARGET" ]; then
+                    exit 0
+                fi
+                am start -a android.intent.action.VIEW -d "${'$'}TARGET" >/dev/null 2>&1 || \
+                am broadcast --user 0 -a com.termux.app.TermuxOpenReceiver -d "${'$'}TARGET" >/dev/null 2>&1
+            """.trimIndent()
+            for (name in listOf("xdg-open", "termux-open", "termux-open-url")) {
+                val f = File(binDir, name)
+                if (!f.exists() || f.length() < 10) {
+                    f.writeText(xdgOpenContent)
+                    f.setExecutable(true, false)
+                    f.setReadable(true, false)
+                    try { Os.chmod(f.absolutePath, 493) } catch (_: Exception) {}
+                }
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed ensuring termux-api dispatcher: ${e.message}")
         }
@@ -2499,7 +2520,9 @@ alias la='ls -A'
 alias l='ls -CF'
 alias cls='clear'
 alias proj='cd ${projectsDir.absolutePath}'
-alias install-agy='rm -f "\$HOME/.local/bin/agy" && curl -fsSL https://antigravity.google/cli/install.sh | bash'
+alias install-agy='rm -f ~/.local/bin/agy && curl -fsSL https://antigravity.google/cli/install.sh | bash'
+alias agy-login='agy auth login'
+alias login-agy='agy auth login'
 
 # Termux styled color prompt
 PS1='\[\033[01;32m\]gemini\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
@@ -2513,7 +2536,7 @@ PS1='\[\033[01;32m\]gemini\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
                     bashrc.appendText("\nexport LD_LIBRARY_PATH=\"${prefixDir.absolutePath}/lib:${binDir.absolutePath}\"\n")
                 }
                 if (!content.contains("install-agy")) {
-                    bashrc.appendText("\nalias install-agy='rm -f \"\$HOME/.local/bin/agy\" && curl -fsSL https://antigravity.google/cli/install.sh | bash'\n")
+                    bashrc.appendText("\nalias install-agy='rm -f ~/.local/bin/agy && curl -fsSL https://antigravity.google/cli/install.sh | bash'\nalias agy-login='agy auth login'\nalias login-agy='agy auth login'\n")
                 }
             } catch (_: Exception) {}
         }

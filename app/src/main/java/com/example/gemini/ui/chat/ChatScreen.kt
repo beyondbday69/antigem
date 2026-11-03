@@ -2031,6 +2031,13 @@ fun ChatScreen(
                 ChatInputBar(
                     isOnline = if (isClaudeChat) !claudeState.isBlocking else systemConnectionState.canSend,
                     isAuth = if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else systemConnectionState.isAuth,
+                    onSignInClick = {
+                        if (isClaudeChat) {
+                            showClaudeLogin = true
+                        } else {
+                            viewModel.loginToAgyHub(force = true)
+                        }
+                    },
                     offlineMessage = if (isClaudeChat) when (claudeState) {
                         com.example.gemini.data.agent.claude.ClaudeStatus.NOT_INSTALLED -> "Claude Code is not installed. Set it up in Settings."
                         com.example.gemini.data.agent.claude.ClaudeStatus.BRIDGE_OUTDATED -> "Restart the local server to use Claude Code."
@@ -2596,7 +2603,8 @@ fun ChatScreen(
     // Local Server Output & Logs Dialog
     if (showLocalServerOutputDialog) {
         com.example.gemini.ui.components.LocalServerOutputDialog(
-            onDismiss = { showLocalServerOutputDialog = false }
+            onDismiss = { showLocalServerOutputDialog = false },
+            onSignIn = { viewModel.loginToAgyHub(force = true) }
         )
     }
 
