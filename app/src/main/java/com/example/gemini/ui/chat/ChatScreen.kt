@@ -275,6 +275,12 @@ fun ChatScreen(
     var showLocalTerminalDialog by rememberSaveable { mutableStateOf(false) }
     var showLocalToolsInstallDialog by remember { mutableStateOf(false) }
     var showLocalServerOutputDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        com.example.gemini.data.local.LocalServerManager.showLogsEvent.collect {
+            showLocalServerOutputDialog = true
+        }
+    }
     val serverStatus by com.example.gemini.data.local.LocalServerManager.status.collectAsState()
     val isLocalRunning = serverStatus is com.example.gemini.data.local.LocalServerStatus.Running
     val isLocalStarting = serverStatus is com.example.gemini.data.local.LocalServerStatus.Starting
@@ -359,6 +365,7 @@ fun ChatScreen(
     val serverRestarting = serverStatus is com.example.gemini.data.local.LocalServerStatus.Starting ||
         serverStatus is com.example.gemini.data.local.LocalServerStatus.Stopping
     val restartLocalServer = {
+        showLocalServerOutputDialog = true
         com.example.gemini.ui.components.AppToastHelper.showToast("Restarting the local server…", com.example.gemini.ui.components.ChatToastType.INFO)
         com.example.gemini.data.local.LocalServerManager.restartServer(context)
     }
@@ -1413,7 +1420,7 @@ fun ChatScreen(
                                         error = claudeStatusError,
                                         onSignIn = { showClaudeLogin = true },
                                         onSetup = openClaudeSetup,
-                                        onRestartServer = { com.example.gemini.data.local.LocalServerManager.restartServer(context) },
+                                        onRestartServer = restartLocalServer,
                                         onRetry = { viewModel.claudeAccount.refreshStatus() },
                                         onServerLogs = { showLocalServerOutputDialog = true },
                                         serverStarting = serverRestarting
@@ -2013,7 +2020,7 @@ fun ChatScreen(
                             state = claudeChatState,
                             onSignIn = { showClaudeLogin = true },
                             onSetup = openClaudeSetup,
-                            onRestartServer = { com.example.gemini.data.local.LocalServerManager.restartServer(context) },
+                            onRestartServer = restartLocalServer,
                             onRetry = { viewModel.claudeAccount.refreshStatus() }
                         )
                     }

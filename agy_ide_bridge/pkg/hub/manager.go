@@ -80,6 +80,16 @@ func FindAllAgyBinaries() []string {
 	if prefix := os.Getenv("PREFIX"); prefix != "" {
 		rawCandidates = append(rawCandidates, filepath.Join(prefix, "bin", "agy"))
 	}
+	rawCandidates = append(rawCandidates,
+		"/data/data/com.antigem/files/usr/bin/agy",
+		"/data/data/com.antigem/files/home/.local/bin/agy",
+		"/data/data/com.antigem/files/home/.gemini/bin/agy",
+		"/data/data/com.termux/files/usr/bin/agy",
+		"/data/data/com.termux/files/home/.local/bin/agy",
+		"/data/data/com.termux/files/home/.gemini/bin/agy",
+		"/usr/local/bin/agy",
+		"/usr/bin/agy",
+	)
 	if p := config.SafeLookPath("agy"); p != "" {
 		rawCandidates = append(rawCandidates, p)
 	}

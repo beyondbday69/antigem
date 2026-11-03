@@ -36,6 +36,11 @@ object LocalServerManager {
     private val _serverSession = MutableStateFlow<LocalPtySession?>(null)
     val serverSession: StateFlow<LocalPtySession?> = _serverSession.asStateFlow()
 
+    val showLogsEvent = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
+        replay = 0,
+        extraBufferCapacity = 1
+    )
+
     private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var exitObserverJob: Job? = null
     private var activeJob: Job? = null
@@ -214,10 +219,21 @@ object LocalServerManager {
         }
         val tzOffset = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
 
-        val binParam = if (agyCmd.isNotBlank()) {
-            " --bin \"$agyCmd\""
-        } else {
-            ""
+        val homeDir = LocalEnvironmentManager.getHomeDir(context)
+        val binDir = LocalEnvironmentManager.getBinDir(context)
+        val resolvedAgyFile = when {
+            agyCmd.startsWith("~/") -> File(homeDir, agyCmd.removePrefix("~/"))
+            agyCmd.startsWith("/") -> File(agyCmd)
+            else -> File(binDir, agyCmd)
+        }
+        val defaultHomeAgy = File(homeDir, ".local/bin/agy")
+        val prefixAgy = File(binDir, "agy")
+
+        val binParam = when {
+            agyCmd.isNotBlank() && resolvedAgyFile.exists() -> " --bin \"$agyCmd\""
+            defaultHomeAgy.exists() -> " --bin \"${defaultHomeAgy.absolutePath}\""
+            prefixAgy.exists() -> " --bin \"${prefixAgy.absolutePath}\""
+            else -> ""
         }
         val claudeCmd = authPrefs.getClaudeBinaryPathSync().trim()
         val claudeBinParam = if (claudeCmd.isNotBlank() && com.example.gemini.domain.model.AgentKind.CLAUDE in com.example.gemini.data.agent.AgentPreferences.enabledSync(context)) {
@@ -296,12 +312,15 @@ object LocalServerManager {
             return
         }
         hasInitialAutoStarted = true
-        startServer(context, forceRestart = false)
+        startServer(context, forceRestart = false, showLogs = false)
     }
 
-    fun startServer(context: Context, forceRestart: Boolean = false) {
+    fun startServer(context: Context, forceRestart: Boolean = false, showLogs: Boolean = true) {
         if (hasServerScript(context)) {
             hasInitialAutoStarted = true
+        }
+        if (showLogs) {
+            showLogsEvent.tryEmit(Unit)
         }
         activeJob?.cancel()
         activeJob = managerScope.launch {
@@ -431,8 +450,11 @@ object LocalServerManager {
     }
 
     /** Restarts the server and waits until it is starting again (agent selection changed). */
-    suspend fun restartServerAndWait(context: Context) {
+    suspend fun restartServerAndWait(context: Context, showLogs: Boolean = false) {
         hasInitialAutoStarted = true
+        if (showLogs) {
+            showLogsEvent.tryEmit(Unit)
+        }
         activeJob?.cancel()
         _status.value = LocalServerStatus.Starting
         stopServerInternal()
@@ -457,8 +479,11 @@ object LocalServerManager {
         forceKillAll()
     }
 
-    fun restartServer(context: Context) {
+    fun restartServer(context: Context, showLogs: Boolean = true) {
         hasInitialAutoStarted = true
+        if (showLogs) {
+            showLogsEvent.tryEmit(Unit)
+        }
         activeJob?.cancel()
         activeJob = managerScope.launch {
             _status.value = LocalServerStatus.Starting

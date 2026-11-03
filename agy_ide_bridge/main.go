@@ -246,8 +246,8 @@ func main() {
 
 	resolvedAgyBin, err := hub.ResolveAgyBinaryInteractive(customAgyBin, forceStart || skipHub)
 	if customAgyBin != "" && err != nil {
-		fmt.Printf(" \033[1;31m✗ Fatal Error:\033[0m %v\n", err)
-		os.Exit(1)
+		fmt.Printf(" \033[1;33m[!] Warning: Specified AGY binary '%s' not found (%v). Auto-discovering...\033[0m\n", customAgyBin, err)
+		resolvedAgyBin, err = hub.ResolveAgyBinaryInteractive("", forceStart || skipHub)
 	}
 	if err != nil && !skipHub {
 		fmt.Printf(" \033[31m[!] AGY Discovery Warning:\033[0m %v\n", err)

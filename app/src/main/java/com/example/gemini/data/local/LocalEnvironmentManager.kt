@@ -1557,23 +1557,28 @@ object LocalEnvironmentManager {
                                         }
                                     }
 
-                                    // Apply exact Unix mode recorded in the ZIP header
-                                    if (unixMode != 0) {
-                                        try {
-                                            Os.chmod(targetFile.absolutePath, if (isUbuntuMode) unixMode and 511 else unixMode)
-                                        } catch (e: Exception) {
-                                            Log.w(TAG, "chmod failed on ${targetFile.name} (mode $unixMode): ${e.message}")
-                                        }
+                                    // Apply masked Unix mode (chmod accepts 07777 mode bits; strip file-type bits)
+                                    val permMode = if (unixMode != 0) (unixMode and 511) else 0
+                                    val isExecutableDir = targetFile.parentFile?.name in listOf("bin", "libexec", "applets", "sbin")
+                                    val isExecutablePath = targetFile.absolutePath.contains("/bin/") || targetFile.absolutePath.contains("/libexec/")
+                                    val shouldBeExecutable = isExecutableDir || isExecutablePath || (permMode and 73) != 0 || (unixMode == 0 && !targetFile.name.contains("."))
+
+                                    val finalMode = if (shouldBeExecutable) {
+                                        (if (permMode != 0) permMode else 493) or 493 // rwxr-xr-x (0755)
                                     } else {
-                                        // Fallback if ZIP had no Unix attributes
-                                        val isExecutableDir = targetFile.parentFile?.name in listOf("bin", "libexec", "applets", "sbin")
-                                        val isExecutablePath = targetFile.absolutePath.contains("/bin/") || targetFile.absolutePath.contains("/libexec/")
-                                        if (isExecutableDir || isExecutablePath || !targetFile.name.contains(".")) {
-                                            targetFile.setExecutable(true, false)
-                                        }
-                                        targetFile.setReadable(true, false)
-                                        targetFile.setWritable(true, true)
+                                        if (permMode != 0) permMode else 420 // rw-r--r-- (0644)
                                     }
+
+                                    try {
+                                        Os.chmod(targetFile.absolutePath, finalMode)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "chmod failed on ${targetFile.name} (mode $finalMode): ${e.message}")
+                                    }
+                                    if (shouldBeExecutable) {
+                                        targetFile.setExecutable(true, false)
+                                    }
+                                    targetFile.setReadable(true, false)
+                                    targetFile.setWritable(true, true)
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Non-fatal error extracting ${rawName} to ${targetFile.absolutePath}: ${e.message}")
                                 }
@@ -2133,6 +2138,16 @@ object LocalEnvironmentManager {
         val bashFile = File(binDir, "bash")
         val shFile = File(binDir, "sh")
 
+        // Ensure all binaries in binDir are executable
+        try {
+            binDir.listFiles()?.forEach { file ->
+                if (file.isFile) {
+                    file.setExecutable(true, false)
+                    try { Os.chmod(file.absolutePath, 493) } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+
         // Ensure a working sh fallback exists if not present in archive
         if (!shFile.exists() || !shFile.canExecute()) {
             if (bashFile.exists() && bashFile.canExecute()) {
@@ -2140,6 +2155,16 @@ object LocalEnvironmentManager {
             } else if (dashFile.exists() && dashFile.canExecute()) {
                 try { Os.symlink("dash", shFile.absolutePath) } catch (_: Exception) {}
             }
+        }
+
+        // Ensure login fallback exists
+        val loginFile = File(binDir, "login")
+        if (!loginFile.exists()) {
+            try {
+                loginFile.writeText("#!${shFile.absolutePath}\nexec \"${bashFile.absolutePath}\" -l \"$@\"\n")
+                loginFile.setExecutable(true, false)
+                try { Os.chmod(loginFile.absolutePath, 493) } catch (_: Exception) {}
+            } catch (_: Exception) {}
         }
 
         projectsDir.mkdirs()

@@ -267,7 +267,17 @@ class LocalPtySession(
                 LocalEnvironmentManager.ensureClaudeWrapper(context)
                 LocalEnvironmentManager.ensureTermuxApiDispatcher(context)
 
-                val loginShellBinaries = arrayOf("login", "bash", "zsh", "fish", "sh")
+                // Ensure all binaries in bin have execute permissions
+                try {
+                    bin.listFiles()?.forEach { file ->
+                        if (file.isFile && !file.canExecute()) {
+                            file.setExecutable(true, false)
+                            try { Os.chmod(file.absolutePath, 493) } catch (_: Exception) {}
+                        }
+                    }
+                } catch (_: Exception) {}
+
+                val loginShellBinaries = arrayOf("bash", "zsh", "fish", "login", "sh")
 
                 val shellBinary = when {
                     forceShell != null && File(bin, forceShell).exists() && File(bin, forceShell).canExecute() -> File(bin, forceShell).absolutePath
@@ -314,6 +324,10 @@ class LocalPtySession(
                 envMap["TERMUX_APP_PID"] = "${android.os.Process.myPid()}"
                 envMap["TERMUX__USER_ID"] = "0"
                 envMap["SHELL"] = shellBinary
+                val libExec = File(lib, "libtermux-exec.so")
+                if (libExec.exists() && !envMap.containsKey("LD_PRELOAD")) {
+                    envMap["LD_PRELOAD"] = libExec.absolutePath
+                }
                 envMap["ANDROID_DATA"] = "/data"
                 envMap["ANDROID_ROOT"] = "/system"
                 envMap["LANG"] = "en_US.UTF-8"
