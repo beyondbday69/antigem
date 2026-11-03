@@ -2499,7 +2499,7 @@ alias la='ls -A'
 alias l='ls -CF'
 alias cls='clear'
 alias proj='cd ${projectsDir.absolutePath}'
-alias install-agy='rm -f "$HOME/.local/bin/agy" && curl -fsSL https://antigravity.google/cli/install.sh | bash'
+alias install-agy='rm -f "\$HOME/.local/bin/agy" && curl -fsSL https://antigravity.google/cli/install.sh | bash'
 
 # Termux styled color prompt
 PS1='\[\033[01;32m\]gemini\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
