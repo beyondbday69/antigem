@@ -40,8 +40,7 @@ android {
 
     flavorDimensions += "mode"
     productFlavors {
-        // Local ports differ per app so com.antigem and com.termux can be installed and run side by side
-        // (com.antigem: +2, so its bridge port never equals com.termux's hub port).
+        // Local ports differ per app flavor so both can be configured independently.
         create("standard") {
             dimension = "mode"
             applicationId = "com.antigem"
@@ -51,7 +50,7 @@ android {
         }
         create("termux") {
             dimension = "mode"
-            applicationId = "com.termux"
+            applicationId = "com.antigem"
             buildConfigField("int", "BRIDGE_PORT", "1234")
             buildConfigField("int", "HUB_PORT", "1235")
             buildConfigField("int", "BROWSER_MCP_PORT", "8765")

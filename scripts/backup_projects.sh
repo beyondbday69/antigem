@@ -3,6 +3,8 @@
 if [ -z "${BASH_VERSION:-}" ]; then
     if [ -n "${PREFIX:-}" ] && [ -x "$PREFIX/bin/bash" ]; then
         exec "$PREFIX/bin/bash" "$0" "$@"
+    elif [ -x "/data/data/com.antigem/files/usr/bin/bash" ]; then
+        exec "/data/data/com.antigem/files/usr/bin/bash" "$0" "$@"
     elif [ -x "/data/data/com.termux/files/usr/bin/bash" ]; then
         exec "/data/data/com.termux/files/usr/bin/bash" "$0" "$@"
     elif command -v bash >/dev/null 2>&1; then
@@ -15,8 +17,23 @@ fi
 # ==============================================================================
 set -euo pipefail
 
-PREFIX_DIR="${PREFIX:-/data/data/com.termux/files/usr}"
-HOME_DIR="${HOME:-/data/data/com.termux/files/home}"
+PREFIX_DIR="${PREFIX:-}"
+if [ -z "$PREFIX_DIR" ]; then
+    if [ -d "/data/data/com.antigem/files/usr" ]; then
+        PREFIX_DIR="/data/data/com.antigem/files/usr"
+    else
+        PREFIX_DIR="/data/data/com.termux/files/usr"
+    fi
+fi
+
+HOME_DIR="${HOME:-}"
+if [ -z "$HOME_DIR" ]; then
+    if [ -d "/data/data/com.antigem/files/home" ]; then
+        HOME_DIR="/data/data/com.antigem/files/home"
+    else
+        HOME_DIR="/data/data/com.termux/files/home"
+    fi
+fi
 TMP_ROOT="${TMPDIR:-${PREFIX_DIR}/tmp}"
 mkdir -p "$TMP_ROOT"
 

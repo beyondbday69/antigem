@@ -110,7 +110,9 @@ class AgyPluginService(
         }
 
         // 3. Android / Termux standard sandboxes
+        list.add("file:///data/data/com.antigem/files/home/.gemini/config/mcp_config.json")
         list.add("file:///data/data/com.termux/files/home/.gemini/config/mcp_config.json")
+        list.add("file:///data/user/0/com.antigem/files/home/.gemini/config/mcp_config.json")
         list.add("file:///data/user/0/com.termux/files/home/.gemini/config/mcp_config.json")
 
         // 4. Java user.home
@@ -186,15 +188,22 @@ class AgyPluginService(
 
                     val envMap = cmdEntry.env.toMutableMap()
                     // Android / Termux environment loader injection
-                    val isAndroidTermux = java.io.File("/data/data/com.termux/files/usr/lib/libtermux-exec.so").exists() ||
+                    val prefixPath = System.getenv("PREFIX")
+                        ?: if (java.io.File("/data/data/com.antigem/files/usr").exists()) "/data/data/com.antigem/files/usr"
+                           else "/data/data/com.termux/files/usr"
+                    val homePath = System.getenv("HOME")
+                        ?: if (java.io.File("/data/data/com.antigem/files/home").exists()) "/data/data/com.antigem/files/home"
+                           else "/data/data/com.termux/files/home"
+                    val libExec = java.io.File("$prefixPath/lib/libtermux-exec.so")
+                    val isAndroidTermux = libExec.exists() ||
                                           System.getenv("PREFIX") != null ||
                                           (System.getProperty("java.vendor")?.contains("Android", ignoreCase = true) == true)
                     if (isAndroidTermux) {
-                        if (!envMap.containsKey("LD_PRELOAD") && java.io.File("/data/data/com.termux/files/usr/lib/libtermux-exec.so").exists()) {
-                            envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
+                        if (!envMap.containsKey("LD_PRELOAD") && libExec.exists()) {
+                            envMap["LD_PRELOAD"] = libExec.absolutePath
                         }
                         if (!envMap.containsKey("PATH")) {
-                            envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
+                            envMap["PATH"] = "$homePath/.local/bin:$prefixPath/bin:/system/bin"
                         }
                     }
 
