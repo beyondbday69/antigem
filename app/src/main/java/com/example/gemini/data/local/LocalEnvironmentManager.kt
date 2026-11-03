@@ -684,17 +684,42 @@ object LocalEnvironmentManager {
                 |    done
                 |fi
                 |
+                |
+                |# 3. If TARGET is still missing, auto-download arm64 binary via install.sh
+                |if [ -z "${'$'}TARGET" ]; then
+                |    echo "Notice: Antigravity binary not found. Auto-downloading via install.sh..." >&2
+                |    if command -v curl >/dev/null 2>&1; then
+                |        (rm -f "$home/.local/bin/agy" 2>/dev/null || true)
+                |        (curl -fsSL https://antigravity.google/cli/install.sh | bash) 2>&1
+                |        if [ -f "$home/.local/bin/agy" ] && [ -s "$home/.local/bin/agy" ]; then
+                |            MAGIC="${'$'}(head -c 4 "$home/.local/bin/agy" 2>/dev/null)"
+                |            if [ "${'$'}MAGIC" = $'\\x7fELF' ]; then
+                |                mv "$home/.local/bin/agy" "$home/.local/bin/agy.va39" 2>/dev/null || cp "$home/.local/bin/agy" "$home/.local/bin/agy.va39"
+                |                chmod 755 "$home/.local/bin/agy.va39"
+                |                TARGET="$home/.local/bin/agy.va39"
+                |            fi
+                |        fi
+                |    fi
+                |fi
+                |
                 |if [ -z "${'$'}TARGET" ]; then
                 |    echo "Antigravity CLI binary (agy.va39) not found in ~/.local/bin or $prefix/bin." >&2
-                |    echo "Please place the arm64 agy executable at ~/.local/bin/agy.va39 or in your Download folder as agy.va39" >&2
+                |    echo "Run in terminal: curl -fsSL https://antigravity.google/cli/install.sh | bash" >&2
                 |    exit 127
                 |fi
                 |
                 |unset LD_PRELOAD
                 |export LD_LIBRARY_PATH="$prefix/lib:${'$'}GLIBC_LIB:${'$'}LD_LIBRARY_PATH"
-                |if [ -x "${'$'}LOADER" ]; then
-                |    exec "${'$'}LOADER" --library-path "${'$'}GLIBC_LIB" "${'$'}TARGET" "${'$'}@"
+                |
+                |# Check if target binary requires glibc loader (contains ld-linux) or runs native on Android (bionic)
+                |if head -c 2048 "${'$'}TARGET" 2>/dev/null | grep -q "ld-linux"; then
+                |    if [ -x "${'$'}LOADER" ]; then
+                |        exec "${'$'}LOADER" --library-path "${'$'}GLIBC_LIB" "${'$'}TARGET" "${'$'}@"
+                |    else
+                |        exec "${'$'}TARGET" "${'$'}@"
+                |    fi
                 |else
+                |    # Native Android Bionic binary
                 |    exec "${'$'}TARGET" "${'$'}@"
                 |fi
                 |""".trimMargin()
@@ -716,7 +741,7 @@ object LocalEnvironmentManager {
             }
 
             val localAgyLink = File(localBin, "agy")
-            if (wrapper.exists()) {
+            if (wrapper.exists() && (localAgyVa39.exists() || prefixAgyVa39.exists())) {
                 if (!isElfBinary(localAgyLink)) {
                     val pointsToWrapper = try {
                         Os.readlink(localAgyLink.absolutePath) == wrapper.absolutePath
@@ -730,6 +755,75 @@ object LocalEnvironmentManager {
         } catch (e: Exception) {
             Log.w(TAG, "AGY launcher setup failed: ${e.message}")
         }
+    }
+
+    /**
+     * Downloads official Antigravity CLI arm64 binary directly from Google release servers and installs to ~/.local/bin/agy.va39
+     */
+    suspend fun autoDownloadAgyExecutable(
+        context: Context,
+        onProgress: ((String) -> Unit)? = null
+    ): Boolean = withContext(Dispatchers.IO) {
+        val home = getHomeDir(context)
+        val localBin = File(home, ".local/bin")
+        localBin.mkdirs()
+        val destFile = File(localBin, "agy.va39")
+        if (destFile.exists() && destFile.length() > 10 * 1024 * 1024L) {
+            return@withContext true
+        }
+
+        try {
+            onProgress?.invoke("Querying Antigravity CLI release manifest...")
+            val manifestUrl = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/android_arm64.json"
+            val req = Request.Builder().url(manifestUrl).build()
+            val manifestJson = httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext false
+                resp.body?.string() ?: return@withContext false
+            }
+
+            val urlPattern = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"")
+            val dlUrl = urlPattern.find(manifestJson)?.groupValues?.get(1) ?: return@withContext false
+
+            onProgress?.invoke("Downloading Antigravity CLI package...")
+            val tmpFile = File(localBin, ".agy.va39.download")
+            if (tmpFile.exists()) tmpFile.delete()
+
+            val dlReq = Request.Builder().url(dlUrl).build()
+            httpClient.newCall(dlReq).execute().use { dlResp ->
+                if (!dlResp.isSuccessful) return@withContext false
+                val body = dlResp.body ?: return@withContext false
+                val inStream = body.byteStream()
+                val gzStream = java.util.zip.GZIPInputStream(inStream)
+                val tarIn = TarArchiveInputStream(gzStream)
+                var entry = tarIn.nextTarEntry
+                var found = false
+                while (entry != null) {
+                    val name = File(entry.name).name
+                    if (name == "antigravity" || name == "agy") {
+                        FileOutputStream(tmpFile).use { out ->
+                            tarIn.copyTo(out)
+                        }
+                        found = true
+                        break
+                    }
+                    entry = tarIn.nextTarEntry
+                }
+                if (!found) return@withContext false
+            }
+
+            if (tmpFile.exists() && tmpFile.length() > 10 * 1024 * 1024L) {
+                if (destFile.exists()) destFile.delete()
+                tmpFile.renameTo(destFile)
+                destFile.setExecutable(true, false)
+                try { Os.chmod(destFile.absolutePath, 493) } catch (_: Exception) {}
+                ensureAgyWrapper(context)
+                onProgress?.invoke("✓ Antigravity CLI installed successfully.")
+                return@withContext true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "autoDownloadAgyExecutable failed: ${e.message}")
+        }
+        return@withContext false
     }
 
     fun ensureTermuxApiDispatcher(context: Context) {
@@ -2405,6 +2499,7 @@ alias la='ls -A'
 alias l='ls -CF'
 alias cls='clear'
 alias proj='cd ${projectsDir.absolutePath}'
+alias install-agy='rm -f "$HOME/.local/bin/agy" && curl -fsSL https://antigravity.google/cli/install.sh | bash'
 
 # Termux styled color prompt
 PS1='\[\033[01;32m\]gemini\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
@@ -2416,6 +2511,9 @@ PS1='\[\033[01;32m\]gemini\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
                 val content = bashrc.readText()
                 if (!content.contains("LD_LIBRARY_PATH")) {
                     bashrc.appendText("\nexport LD_LIBRARY_PATH=\"${prefixDir.absolutePath}/lib:${binDir.absolutePath}\"\n")
+                }
+                if (!content.contains("install-agy")) {
+                    bashrc.appendText("\nalias install-agy='rm -f \"\$HOME/.local/bin/agy\" && curl -fsSL https://antigravity.google/cli/install.sh | bash'\n")
                 }
             } catch (_: Exception) {}
         }

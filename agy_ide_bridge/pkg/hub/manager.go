@@ -442,16 +442,27 @@ func (m *HubManager) Start() error {
 			m.AgyBinPath = bins[0]
 		}
 	}
-	if m.AgyBinPath == "" {
-		err := fmt.Errorf("AGY executable binary not specified or found")
-		m.setStatusLocked(HubStatusError, err.Error())
-		return err
-	}
 
 	targetBin := m.AgyBinPath
 	patchTarget := ResolvePatchTarget(m.AgyBinPath)
 	if patchTarget != "" && fileExists(patchTarget) {
 		targetBin = patchTarget
+	}
+
+	// Auto-download Antigravity CLI arm64 if no valid binary exists on disk
+	if targetBin == "" || !fileExists(targetBin) {
+		fmt.Println(" \033[1;36m⠋ Antigravity executable not found. Auto-downloading official arm64 build (curl -fsSL https://antigravity.google/cli/install.sh | bash)...\033[0m")
+		home, _ := os.UserHomeDir()
+		targetDir := filepath.Join(home, ".local", "bin")
+		installedBin, dlErr := DownloadAndInstallAgy(targetDir, os.Stdout)
+		if dlErr != nil {
+			err := fmt.Errorf("Antigravity binary auto-download failed: %w", dlErr)
+			m.setStatusLocked(HubStatusError, err.Error())
+			return err
+		}
+		m.AgyBinPath = installedBin
+		targetBin = installedBin
+		patchTarget = installedBin
 	}
 
 	// In-place patch AGY binary with 20-byte framed security header (Strict Fail-Closed Security)
@@ -536,16 +547,20 @@ func (m *HubManager) Start() error {
 	}
 
 	isElf := false
+	needsGlibc := false
 	if f, err := os.Open(targetBin); err == nil {
-		buf := make([]byte, 4)
-		if n, _ := f.Read(buf); n == 4 && bytes.Equal(buf, []byte{0x7f, 'E', 'L', 'F'}) {
+		buf := make([]byte, 2048)
+		if n, _ := f.Read(buf); n > 16 && bytes.Equal(buf[:4], []byte{0x7f, 'E', 'L', 'F'}) {
 			isElf = true
+			if bytes.Contains(buf[:n], []byte("ld-linux")) {
+				needsGlibc = true
+			}
 		}
 		_ = f.Close()
 	}
 
 	var cmd *exec.Cmd
-	if isElf && fileExists(glibcLoader) {
+	if isElf && needsGlibc && fileExists(glibcLoader) {
 		loaderArgs := append([]string{"--library-path", filepath.Dir(glibcLoader), targetBin}, args...)
 		cmd = exec.CommandContext(ctx, glibcLoader, loaderArgs...)
 	} else {

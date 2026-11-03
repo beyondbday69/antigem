@@ -362,6 +362,14 @@ object LocalServerManager {
         LocalEnvironmentManager.ensureAgyWrapper(appContext)
         LocalEnvironmentManager.ensureClaudeWrapper(appContext)
 
+        val homeAgyVa39 = File(LocalEnvironmentManager.getHomeDir(appContext), ".local/bin/agy.va39")
+        val prefixAgyVa39 = File(LocalEnvironmentManager.getBinDir(appContext), "agy.va39")
+        if (!homeAgyVa39.exists() && !prefixAgyVa39.exists()) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                LocalEnvironmentManager.autoDownloadAgyExecutable(appContext)
+            }
+        }
+
         val command = resolveServerCommand(appContext)
         if (command == null) {
             Log.d(TAG, "[ServerManager] No start or server executable found in home directory")
